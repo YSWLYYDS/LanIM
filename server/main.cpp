@@ -7,13 +7,22 @@
 #include "userrepository.h"
 #include "messagerepository.h"
 #include "logging.h"
+#include "ticketrepository.h"
+#include <QCommandLineParser>
+#include <QFileInfo>
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc,argv);
     app.setApplicationName("LanIMServer");
+    QCommandLineParser parser;
+    parser.addHelpOption();
+    parser.addOption({"port","TCP port","port","45454"});
+    parser.addOption({"database","SQLite file","path",QDir(QCoreApplication::applicationDirPath()).filePath("lanim.db")});
+    parser.addOption({"support","Server-authorized support usernames, comma separated","names"});
+    parser.process(app);
     Logging::install();
     const QString databasePath=
-        QDir(QCoreApplication::applicationDirPath()).filePath("lanim.db");
+        QFileInfo(parser.value("database")).absoluteFilePath();
 
     DatabaseManager databaseManager(databasePath);
     if(!databaseManager.open()){
@@ -31,8 +40,16 @@ int main(int argc, char *argv[])
     qInfo() << "SQLite database ready:" << databasePath;
     UserRepository userRepository(databaseManager.database());
     MessageRepository messageRepository(databaseManager.database());
-    ChatServer server(userRepository, messageRepository);
-    constexpr quint16 serverPort=45454;
+    TicketRepository tickets(databaseManager.database());
+    if(!tickets.initialize()){qCritical()<<tickets.lastError();return 1;}
+    QStringList supportUsers;
+    for(const QString &name:parser.value("support").split(',',Qt::SkipEmptyParts))supportUsers.append(name.trimmed());
+    supportUsers.removeAll(QString());supportUsers.removeDuplicates();
+    ChatServer server(userRepository, messageRepository,tickets,supportUsers);
+    bool portOk=false;const int port=parser.value("port").toInt(&portOk);
+    if(!portOk||port<1||port>65535){qCritical()<<"Invalid port";return 1;}
+    const quint16 serverPort=static_cast<quint16>(port);
+    qInfo()<<"Support accounts (server configured):"<<supportUsers;
     if(!server.start(serverPort)){
         return 1;
     }

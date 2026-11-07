@@ -10,6 +10,7 @@
 #include <QUuid>
 #include "messagerepository.h"
 #include <QJsonArray>
+#include "ticketrepository.h"
 
 
 namespace  {
@@ -25,8 +26,8 @@ QString hashPassword(const QString &password)
 
 }
 
-ChatServer::ChatServer(UserRepository &userRepository,MessageRepository &messageRepository,QObject *parent)
-    :QObject(parent),m_userRepository(userRepository),m_messageRepository(messageRepository)
+ChatServer::ChatServer(UserRepository &userRepository,MessageRepository &messageRepository,TicketRepository &tickets,const QStringList &supportUsers,QObject *parent)
+    :QObject(parent),m_tickets(tickets),m_supportUsers(supportUsers),m_userRepository(userRepository),m_messageRepository(messageRepository)
 {
     connect(&m_tcpServer,&QTcpServer::newConnection,
                 this,&ChatServer::onNewConnection);
@@ -133,9 +134,13 @@ void ChatServer::onReadyRead(QTcpSocket *socket)
             logMessage.insert("body", body);
         }
 
-        qInfo() << "Received message:" << logMessage;
+        // Log routing metadata, not passwords, conversations or fault descriptions.
+        qInfo() << "Received type:" << type << "requestId:" << message.value("requestId").toString();
 
-        if(type=="system.hello"){
+        if(type.startsWith("ticket.")){
+            handleTicket(socket,message);
+        }
+        else if(type=="system.hello"){
             const QJsonObject welcomeMessage{
                 {"version",1},
                 {"type","system.welcome"},
@@ -183,6 +188,21 @@ void ChatServer::onReadyRead(QTcpSocket *socket)
     }
 
 
+}
+
+void ChatServer::handleTicket(QTcpSocket *socket,const QJsonObject &message)
+{
+    const QString actor=m_sessionManager.usernameForSocket(socket);
+    const QString action=message.value("type").toString().mid(7);
+    const auto body=m_tickets.handle(actor,m_supportUsers.contains(actor),action,message.value("body").toObject());
+    sendMessage(socket,{{"version",1},{"type","ticket.result"},{"requestId",message.value("requestId")},{"body",body}});
+    if(!body.value("success").toBool()||action=="list"||action=="detail")return;
+    const QString id=body.value("ticket").toObject().value("id").toString();
+    for(auto *peer:m_sessionManager.onlineSockets()){
+        const QString user=m_sessionManager.usernameForSocket(peer);
+        if(m_tickets.canAccess(user,m_supportUsers.contains(user),id))
+            sendMessage(peer,{{"version",1},{"type","ticket.changed"},{"body",QJsonObject{{"id",id}}}});
+    }
 }
 
 void ChatServer::checkHeartbeatTimeouts()

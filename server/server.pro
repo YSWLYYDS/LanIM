@@ -1,4 +1,6 @@
 QT += core network sql
+SOURCES += ticketrepository.cpp
+HEADERS += ticketrepository.h
 
 TEMPLATE = app
 TARGET = LanIMServer

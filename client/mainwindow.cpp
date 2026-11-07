@@ -16,6 +16,14 @@
 #include <QListWidget>
 #include <QTextCursor>
 #include <QVBoxLayout>
+#include "ticketpanel.h"
+#include <QSettings>
+#include <QInputDialog>
+#include <QMenuBar>
+#include <QTabWidget>
+#include <QStackedWidget>
+#include "reportpanel.h"
+#include "businessstyle.h"
 
 namespace {
 constexpr quint16 ServerPort=45454;
@@ -25,6 +33,49 @@ MainWindow::MainWindow(QWidget *parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
+    setWindowTitle("营销数据报表与问题协同客户端");
+    QWidget *chatPage=takeCentralWidget();
+    m_loginPage=new QWidget;
+    m_loginPage->setObjectName("loginPage");
+    ui->titleLabel->setText("账户与沟通");
+    auto *loginLayout=new QVBoxLayout(m_loginPage);
+    ui->authGroupBox->setParent(m_loginPage);
+    ui->authGroupBox->setFixedWidth(390);
+    loginLayout->addWidget(ui->authGroupBox,0,Qt::AlignCenter);
+    ui->loginButton->setProperty("primary",true);
+    connect(ui->passwordEdit,&QLineEdit::returnPressed,ui->loginButton,&QPushButton::click);
+    m_businessTabs=new QTabWidget(this);
+    m_businessTabs->setObjectName("businessTabs");
+    auto *reports = new ReportPanel(m_businessTabs);
+    m_businessTabs->addTab(reports,"营销数据报表（HTTP）");
+    m_ticketPanel=new TicketPanel(&m_chatClient,m_businessTabs);
+    m_businessTabs->addTab(m_ticketPanel,"营销问题工单（TCP）");
+    m_businessTabs->addTab(chatPage,"账户与沟通");
+    connect(reports, &ReportPanel::issueRequested, this,
+            [this](const QString &title, const QString &context, const QString &description) {
+      if (m_currentUsername.isEmpty()) {
+        showLoginPage();
+        statusBar()->showMessage("请先登录，再返回报表提交问题", 8000);
+        return;
+      }
+      m_businessTabs->setCurrentIndex(1);
+      m_ticketPanel->createFromReport(title, context, description);
+    });
+    m_workspacePage=BusinessUi::shell(m_businessTabs,"营销工作台","投放数据分析 · 业务问题协同",{"投放数据报表","业务问题工单","账户与沟通"});
+    m_rootPages=new QStackedWidget(this);
+    m_rootPages->addWidget(m_loginPage);
+    m_rootPages->addWidget(m_workspacePage);
+    setCentralWidget(m_rootPages);
+    qApp->setStyleSheet(BusinessUi::stylesheet());
+    resize(620,460);
+    auto *settingsAction=menuBar()->addAction("服务器设置（重启生效）");
+    connect(settingsAction,&QAction::triggered,this,[this]{
+        QSettings settings;bool ok=false;
+        const QString ip=QInputDialog::getText(this,"服务器","IPv4地址",QLineEdit::Normal,settings.value("server/ip","127.0.0.1").toString(),&ok);
+        if(!ok)return;QHostAddress address;if(!address.setAddress(ip)){statusBar()->showMessage("IP地址无效");return;}
+        int port=QInputDialog::getInt(this,"服务器","端口",settings.value("server/port",45454).toInt(),1,65535,1,&ok);if(!ok)return;
+        settings.setValue("server/ip",ip);settings.setValue("server/port",port);statusBar()->showMessage("配置已保存，重启客户端生效");
+    });
 
     m_onlineUsersDock = new QDockWidget("在线用户", this);//创建一个标题为“在线用户”的停靠窗口
     m_onlineUsersDock->setObjectName("onlineUsersDock");
@@ -52,6 +103,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     addDockWidget(Qt::RightDockWidgetArea, m_onlineUsersDock);//addDockWidget 让它自动停靠在主窗口右侧；
     m_onlineUsersDock->hide();//初始隐藏，登录成功才显示
+    connect(m_businessTabs,&QTabWidget::currentChanged,this,[this](int index){m_onlineUsersDock->setVisible(index==2&&!m_currentUsername.isEmpty());});
     //点击其他用户：进入与该用户的私聊发送模式;再次点击当前私聊对象：回到公共聊天室模式;点击自己：不允许私聊自己。
     connect(m_onlineUserList, &QListWidget::itemClicked,
             this, [this](QListWidgetItem *item) {
@@ -138,10 +190,12 @@ MainWindow::MainWindow(QWidget *parent)
 
         m_pendingUsername.clear();
         m_currentUsername.clear();
+        m_ticketPanel->setSession({});
 
         ui->currentUserLabel->setText("当前未登录");
         ui->userPanel->setVisible(false);
 
+        showLoginPage();
         ui->authGroupBox->setVisible(true);
         ui->authGroupBox->setEnabled(false);
         //退出、断线、被互踢时，旧在线名单不能留在界面上。
@@ -207,6 +261,7 @@ MainWindow::MainWindow(QWidget *parent)
             if (success) {
                 m_isLoggedIn = true;
                 m_currentUsername = m_pendingUsername;
+                m_ticketPanel->setSession(m_currentUsername);
                 m_pendingUsername.clear();
 
                 ui->passwordEdit->clear();
@@ -215,14 +270,15 @@ MainWindow::MainWindow(QWidget *parent)
                 ui->currentUserLabel->setText(
                     "当前用户：" + m_currentUsername);
                 ui->userPanel->setVisible(true);
-                m_onlineUsersDock->show();
+                showWorkspace();
+                m_onlineUsersDock->setVisible(m_businessTabs->currentIndex()==2);
                 ui->logoutButton->setEnabled(true);
 
                 ui->messageEdit->setEnabled(true);
                 ui->sendButton->setEnabled(true);
                 ui->messageEdit->setFocus();//光标直接进入输入框，用户可以马上输入
 
-                statusBar()->showMessage("登录成功，可以开始聊天。");
+                statusBar()->showMessage("登录成功，已进入营销工作台。");
             } else {
                 m_pendingUsername.clear();
                 statusBar()->showMessage("登录失败：" + resultText);
@@ -274,6 +330,7 @@ MainWindow::MainWindow(QWidget *parent)
             m_isLoggedIn = false;
             m_pendingUsername.clear();
             m_currentUsername.clear();
+            m_ticketPanel->setSession({});
 
             //退出、断线、被互踢时，旧在线名单不能留在界面上
             m_onlineUsers.clear();
@@ -288,6 +345,7 @@ MainWindow::MainWindow(QWidget *parent)
             ui->currentUserLabel->setText("当前未登录");
             ui->userPanel->setVisible(false);
 
+            showLoginPage();
             ui->authGroupBox->setVisible(true);
             ui->authGroupBox->setEnabled(true);
             ui->usernameEdit->setFocus();
@@ -506,7 +564,11 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
     statusBar()->showMessage("正在连接 LanIM 服务端...");
-    m_chatClient.connectToServer(QHostAddress::LocalHost,ServerPort);
+    QSettings settings;
+    const bool smoke=QCoreApplication::arguments().contains("--smoke-test");
+    const QString host=smoke?"127.0.0.1":settings.value("server/ip","127.0.0.1").toString();
+    const quint16 port=smoke&&qEnvironmentVariableIsSet("BUSINESS_SMOKE_PORT")?static_cast<quint16>(qEnvironmentVariableIntValue("BUSINESS_SMOKE_PORT")):static_cast<quint16>(settings.value("server/port",ServerPort).toUInt());
+    m_chatClient.connectToServer(QHostAddress(host),port);
 }
 
 void MainWindow::sendPublicMessage()
@@ -721,6 +783,24 @@ void MainWindow::refreshOnlineUserList()
 {
     m_onlineUserList->clear();
     m_onlineUserList->addItems(m_onlineUsers);
+}
+
+void MainWindow::showLoginPage()
+{
+    if (!m_rootPages || !m_loginPage)
+        return;
+    m_rootPages->setCurrentWidget(m_loginPage);
+    m_onlineUsersDock->hide();
+    resize(620, 460);
+}
+
+void MainWindow::showWorkspace()
+{
+    if (!m_rootPages || !m_loginPage)
+        return;
+    m_rootPages->setCurrentWidget(m_workspacePage);
+    m_businessTabs->setCurrentIndex(0);
+    resize(1440, 960);
 }
 
 MainWindow::~MainWindow()

@@ -15,6 +15,9 @@ QT_END_NAMESPACE
 class QDockWidget;
 class QListWidget;
 class QPushButton;
+class TicketPanel;
+class QStackedWidget;
+class QTabWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -27,6 +30,11 @@ public:
 private:
     Ui::MainWindow *ui;
     ChatClient m_chatClient;
+    TicketPanel *m_ticketPanel=nullptr;
+    QStackedWidget *m_rootPages=nullptr;
+    QTabWidget *m_businessTabs=nullptr;
+    QWidget *m_loginPage=nullptr;
+    QWidget *m_workspacePage=nullptr;
     void sendRegisterRequest();//读取输入框，发送 auth.register
     void sendLoginRequest();//读取输入框，发送 auth.login
     void sendPublicMessage();//集中处理“从输入框取文本、打包、发送、清空输入框”的逻辑
@@ -43,6 +51,8 @@ private:
                              const QString &sentAt);//把“显示实时消息”和“显示历史消息”的重复代码合并
     void setOnlineUsers(const QStringList &users);//收到服务端完整名单时，替换本地在线用户名单
     void refreshOnlineUserList();//把内存中的名单刷新到右侧 UI 列表。
+    void showLoginPage();
+    void showWorkspace();
 
 
     QString m_pendingUsername;//保存“正在请求登录”的用户名

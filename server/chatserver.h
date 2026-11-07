@@ -15,15 +15,19 @@
 class QTcpSocket;
 class UserRepository;
 class MessageRepository;
+class TicketRepository;
 
 class ChatServer :public QObject
 {
 public:
-    explicit ChatServer(UserRepository &userRepository,MessageRepository &messageRepository,QObject *parent = nullptr);
+    explicit ChatServer(UserRepository &userRepository,MessageRepository &messageRepository,TicketRepository &tickets,const QStringList &supportUsers,QObject *parent = nullptr);
 
     bool start(quint16 port);
 
 private:
+    void handleTicket(QTcpSocket *socket, const QJsonObject &message);
+    TicketRepository &m_tickets;
+    QStringList m_supportUsers;
     void onNewConnection();//当有客户端连上时被调用
     void setupClient(QTcpSocket *socket);//为一个新客户端安装断开、收数据等处理逻辑
     void onReadyRead(QTcpSocket *socket);//处理某个客户端有新网络数据到达
